@@ -1,0 +1,70 @@
+Pre-requisites:
+1. a 'Cluster Seed': <IP-address>:<port>;
+2. Term 'connection' means 'TCP connection' in this document.
+
+Step 1.1. Establish connection to a 'Cluster Seed';
+Step 1.2. LOGIN to the 'Cluster Seed' providing 'User name' and 'Blowfish-encrypted password';
+Step 1.3. Request 'Access node' IP-address and Port from the 'Cluster Seed';
+
+Step 2.1. Establish connection to the 'Access node';
+Step 2.2. LOGIN to the 'Access node' providing 'User name' and 'Blowfish-encrypted password';
+Step 2.3. Request list of cluster Node's IP-addresses and Ports;
+
+For each Node (IP-address and Port) acquired in Step 2.3. perform
+Step 3.1. Establish connection to the 'Node';
+Step 3.2. LOGIN to the 'Node' providing 'User name' and 'Blowfish-encrypted password';
+Step 3.3. Request list of 'Namespaces' from the 'Node'.
+
+Each 'Namespace' information in the response to the request in Step 3.3. contains the following:
+4.1. 'Namespace' name as an ASCII-string;
+4.2. List of 'Replicas' supported by the 'Node' for this 'Namespace'.
+
+Each 'Replica' information from the item 4.2. contains the following:
+5.1. Base64 encoding of the 'Partitions' bitmap represented by the 'Replica'.
+
+
+
+                             =========================================
+                             |            Namespace 'Test'           |
+                             |---------------------------------------|
+                             | K1                                    |
+                             | K2                                    |
+                             =========================================
+                                                |
+                                   Assignment of keys to partitions
+                                                |
+                                                V
+                             =========================================
+                             |    | K1 |    |    | K2 |    |    |    |
+                             |---------------------------------------|
+                             | P0 | P1 | P2 | P3 | P4 | P5 | P6 | P7 |
+                             =========================================
+                                                |
+                                Assignment of partitions to replicas
+                                                |
+                                -------------------------------------
+                                |                                   |
+                                V                                   V
+[====== Replica1 =============================]   [============================= Replica2 ======]
+================  ===========  ================   ===========  ================  ================
+| P0 | P1 | P2 |  | P3 | P4 |  | P5 | P6 | P7 |   | P4 | P7 |  | P0 | P3 | P6 |  | P1 | P2 | P5 |
+|--------------|  |---------|  |--------------|   |---------|  |--------------|  |--------------|
+|    Node1     |  |  Node2  |  |    Node3     |   |  Node1  |  |    Node2     |  |    Node3     |
+|--------------|  |---------|  |--------------|   |---------|  |--------------|  |--------------|
+|    | K1 |    |  |    | K2 |  |    |    |    |   | K2 |    |  |    |    |    |  | K1 |    |    |
+================  ===========  ================   ===========  ================  ================
+
+Node1 response to 4.1., 4.2., 5.1.:
+  Test1: - Namespace name
+    Replica1: 11100000 - Node1 participates in partitions P0, P1, P2 for Replica1
+    Replica2: 00001001 - Node1 participates in partitions P4, P7     for Replica2
+
+Node2 response to 4.1., 4.2., 5.1.:
+  Test1: - Namespace name
+    Replica1: 00011000 - Node2 participates in partitions P3, P4     for Replica1
+    Replica2: 10010010 - Node1 participates in partitions P0, P3, P6 for Replica2
+
+Node3 response to 4.1., 4.2., 5.1.:
+  Test1: - Namespace name
+    Replica1: 00000111 - Node3 participates in partitions P5, P6, P7 for Replica1
+    Replica2: 01100100 - Node1 participates in partitions P1, P2, P5 for Replica2

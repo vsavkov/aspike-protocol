@@ -20,11 +20,15 @@
   enc_remove_request/3,
   dec_remove_response/1,
   enc_exists_request/3,
-  dec_exists_response/1
+  dec_exists_response/1,
+  % https://aerospike.com/docs/server/reference/info?version=7&all=true
+  enc_info_request/1,
+  dec_info_response/1
 ]).
 
 %% High-level encoders/decoders, Server side
 -export([
+  enc_error_response/1,
   dec_login_request/1,
   enc_login_response/2,
   dec_put_request/1,
@@ -34,7 +38,9 @@
   dec_remove_request/1,
   enc_remove_response/1,
   dec_exists_request/1,
-  enc_exists_response/1
+  enc_exists_response/1,
+  dec_info_request/1,
+  enc_info_response/1
 ]).
 
 %% Login-specific encoders/decoders
@@ -105,6 +111,23 @@
   dec_exists_header/1
 ]).
 
+%% Info-specific encoders/decoders
+-export([
+  enc_info_request_pkt/1,
+  dec_info_request_pkt/1,
+  enc_info_response_pkt/1,
+  dec_info_response_pkt/1
+]).
+
+%% Info-specific response parsers
+-export([
+  info_number_of_partitions/1,
+  info_replicas/1,
+  info_dec_partitions_bitmap/2,
+  info_bitmap_to_map/3,
+  info_bitmap_to_set/3
+]).
+
 %% Key-specific
 -export([
   digest/2,
@@ -114,10 +137,13 @@
 
 %% Protocol encoders/decoders
 -export([
+  enc_error_response_pkt/1,
   enc_admin_pkt/1,
   dec_admin_pkt/1,
   enc_message_pkt/1,
   dec_message_pkt/1,
+  enc_info_pkt/1,
+  dec_info_pkt/1,
   enc_message_type_header/10,
   dec_message_type_header/1,
   enc_proto/2,
@@ -141,9 +167,24 @@
   dec_responses/1
 ]).
 
+%% Connect and Login utils
+-export([
+  open_session/4,
+  open_session/5,
+  close_session/1
+]).
+
+%% Receive response utils
+-export([
+  receive_response_info/2,
+  receive_response_message/2
+]).
+
 %% High-level encoders/decoders, Client side
+enc_login_request(User, {_Type, _Value} = Credential) ->
+  enc_admin_pkt(enc_login_request_pkt(User, Credential));
 enc_login_request(User, Credential) ->
-  enc_admin_pkt(enc_login_request_pkt(User, Credential)).
+  enc_login_request(User, {?CREDENTIAL, Credential}).
 
 dec_login_response(Data) ->
   case dec_admin_pkt(Data) of
@@ -166,7 +207,7 @@ dec_put_response(Data) ->
     {ok, {_Version, _Type, Data1}, Rest} ->
       case dec_put_response_pkt(Data1) of
         need_more -> need_more;
-        {ok, #aspike_message_type_header{} = Decoded, _Data2} ->
+        {ok, #aspike_message_type_header{result_code = Decoded}, _Data2} ->
           {ok, Decoded, Rest}
       end
   end.
@@ -196,7 +237,7 @@ dec_remove_response(Data) ->
     {ok, {_Version, _Type, Data1}, Rest} ->
       case dec_remove_response_pkt(Data1) of
         need_more -> need_more;
-        {ok, #aspike_message_type_header{} = Decoded, _Data2} ->
+        {ok, #aspike_message_type_header{result_code = Decoded}, _Data2} ->
           {ok, Decoded, Rest}
       end
   end.
@@ -211,14 +252,29 @@ dec_exists_response(Data) ->
     {ok, {_Version, _Type, Data1}, Rest} ->
       case dec_exists_response_pkt(Data1) of
         need_more -> need_more;
-        {ok, #aspike_message_type_header{} = Decoded, _Data2} ->
+        {ok, #aspike_message_type_header{result_code = Decoded}, _Data2} ->
           {ok, Decoded, Rest}
       end
+  end.
+
+enc_info_request(Names) ->
+  enc_info_pkt(enc_info_request_pkt(Names)).
+
+dec_info_response(Data) ->
+  case dec_info_pkt(Data) of
+    need_more -> need_more;
+    {error, _Reason} = Err -> Err;
+    {ok, {_Version, _Type, Data1}, Rest} ->
+      Decoded = dec_info_response_pkt(Data1),
+      {ok, Decoded, Rest}
   end.
 
 %% High-level encoders/decoders, Client side. End
 
 %% High-level encoders/decoders, Server side
+enc_error_response(Status) ->
+  enc_message_pkt(enc_error_response_pkt(Status)).
+
 dec_login_request(Data) ->
   case dec_admin_pkt(Data) of
     need_more -> need_more;
@@ -305,6 +361,18 @@ dec_exists_request(Data) ->
 
 enc_exists_response(Status) ->
   enc_message_pkt(enc_exists_response_pkt(Status)).
+
+dec_info_request(Data) ->
+  case dec_info_pkt(Data) of
+    need_more -> need_more;
+    {error, _Reason} = Err -> Err;
+    {ok, {_Version, _Type, Data1}, Rest} ->
+      Decoded = dec_info_request_pkt(Data1),
+      {ok, Decoded, Rest}
+  end.
+
+enc_info_response(Fields) ->
+  enc_info_pkt(enc_info_response_pkt(Fields)).
 
 %% High-level encoders/decoders, Server side. End
 
@@ -841,6 +909,93 @@ dec_exists_header(Data) ->
 
 %% Exists-specific encoders/decoders. End
 
+%% Info-specific encoders/decoders
+enc_info_request_pkt(Names) ->
+  lists:foldl(fun append_with_nl/2, <<>>, Names).
+
+append_with_nl(Suffix, Prefix) when is_binary(Suffix) ->
+  <<Prefix/binary,Suffix/binary,"\n">>;
+append_with_nl(Suffix, Prefix) when is_list(Suffix) ->
+  B = list_to_binary(Suffix),
+  <<Prefix/binary,B/binary,"\n">>.
+
+dec_info_request_pkt(Data) ->
+  binary:split(Data, [<<"\n">>], [global]).
+
+enc_info_response_pkt(Fields) ->
+  lists:foldl(fun (Field, Acc) ->
+    B = list_to_binary(lists:join("\t", Field)),
+    <<Acc/binary,B/binary,"\n">> end,
+    <<>>, Fields).
+
+dec_info_response_pkt(Data) ->
+  Fields = binary:split(Data, [<<"\n">>], [global]),
+  lists:map(fun (X) ->
+    list_to_tuple(binary:split(X, [<<"\t">>], [global])) end,
+    Fields).
+
+%% Info-specific encoders/decoders. End
+
+%% Info-specific response parsers
+info_number_of_partitions(Data) ->
+  aspike_util:binary_to_integer(Data).
+
+info_replicas(Data) ->
+  By_namespaces = binary:split(Data, [<<";">>], [global]),
+  [info_namespace_replicas(Ns) || Ns <- By_namespaces].
+
+info_namespace_replicas(Data) ->
+  case binary:split(Data, [<<":">>]) of
+    [Namespace] ->
+      {Namespace,
+        {_N_regime = undefined, _N_replication_factor = undefined, _Bitmaps = []}};
+    [Namespace, Rest] ->
+      Params = info_namespace_replicas_params(Rest),
+      {Namespace,
+        {_N_regime, _N_replication_factor, _Bitmaps} = Params}
+  end.
+
+info_namespace_replicas_params(Data) when is_binary(Data) ->
+  Parts = binary:split(Data, [<<",">>], [global]),
+  info_namespace_replicas_params(Parts);
+info_namespace_replicas_params([Regime, Replication_factor | Bitmaps]) ->
+  N_regime = case aspike_util:binary_to_integer(Regime) of
+               {ok, R} -> R;
+               R_error -> R_error
+             end,
+  N_replication_factor = case aspike_util:binary_to_integer(Replication_factor) of
+                           {ok, F} -> F;
+                           F_error -> F_error
+                         end,
+  {N_regime, N_replication_factor, Bitmaps}.
+
+info_dec_partitions_bitmap(N_partitions, Base64_encoded_bitmap) ->
+  Bitmap_size_needed = aspike_util:bitmap_size(N_partitions),
+  Expected_base64_encoding_len = aspike_util:base64_encoding_len(Bitmap_size_needed),
+  Actual_size = size(Base64_encoded_bitmap),
+  case  Actual_size =:= Expected_base64_encoding_len of
+    true -> base64:decode(Base64_encoded_bitmap);
+    false -> {error,
+      {expected_encoded_bitmap_len, Expected_base64_encoding_len,
+        actual_encoded_bitmap_len, Actual_size}}
+  end.
+
+info_bitmap_to_map(<<>>, _Index, #{} = Acc) ->
+  Acc;
+info_bitmap_to_map(<<2#0:1, Rest/bitstring>>, Index, #{} = Acc) ->
+  info_bitmap_to_map(Rest, Index + 1, Acc);
+info_bitmap_to_map(<<2#1:1, Rest/bitstring>>, Index, #{} = Acc) ->
+  info_bitmap_to_map(Rest, Index + 1, Acc#{Index => 1}).
+
+info_bitmap_to_set(<<>>, _Index, Acc) ->
+  Acc;
+info_bitmap_to_set(<<2#0:1, Rest/bitstring>>, Index, Acc) ->
+  info_bitmap_to_set(Rest, Index + 1, Acc);
+info_bitmap_to_set(<<2#1:1, Rest/bitstring>>, Index, Acc) ->
+  info_bitmap_to_set(Rest, Index + 1, sets:add_element(Index, Acc)).
+
+%% Info-specific response parsers. End
+
 %% Key-specific
 digest([], Key) ->
   K = enc_key(Key),
@@ -893,6 +1048,19 @@ dec_key_digest(Data) ->
 %% Key-specific. End
 
 %% Protocol encoders/decoders
+enc_error_response_pkt(Status) ->
+  enc_message_type_header(
+    Status,
+    _N_fields = 0,
+    _N_bins = 0,
+    _Ttl = 0,
+    _Timeout = 0,
+    _Read_attr = 0,
+    _Write_attr = 0,
+    _Info_attr = 0,
+    _Generation = 0,
+    _Unused = 0).
+
 enc_admin_pkt(Data) ->
   enc_proto(?AS_ADMIN_MESSAGE_TYPE, Data).
 
@@ -904,6 +1072,12 @@ enc_message_pkt(Data) ->
 
 dec_message_pkt(Data) ->
   dec_proto(?AS_MESSAGE_TYPE, Data).
+
+enc_info_pkt(Data) ->
+  enc_proto(?AS_INFO_MESSAGE_TYPE, Data).
+
+dec_info_pkt(Data) ->
+  dec_proto(?AS_INFO_MESSAGE_TYPE, Data).
 
 enc_message_type_header( % corresponds to as_command_write_header_write
     Result_code,
@@ -1100,3 +1274,89 @@ dec_responses(Data, Acc) ->
 %%  {Acc, Data}.
 
 %% Response decoder for 'shackle client' handle_data/2. End
+
+%% Connect and login utils
+open_session(Address, Port, User, Encrypted_password) ->
+  open_session(Address, Port, User, Encrypted_password, 1000).
+open_session(Address, Port, User, Encrypted_password, Timeout) ->
+  case connect(Address, Port, Timeout) of
+    {error, _} = Err -> Err;
+    {ok, Socket} ->
+      Auth = authenticate(Socket, User, Encrypted_password),
+      case handle_authentication(Auth) of
+        {error, _Reason} = Err ->
+          disconnect(Socket),
+          Err;
+        {ok, #{} = Session} ->
+          {ok, Session#{
+            address => Address, port => Port, user => User,
+            socket => Socket}}
+      end
+  end.
+
+close_session(#{socket := Socket}) ->
+  disconnect(Socket);
+close_session(_) -> ok.
+
+connect(Address, Port, Timeout) when is_binary(Address) ->
+  connect(binary_to_list(Address), Port, Timeout);
+connect(Address, Port, Timeout) ->
+  connect(Address, Port, [binary, {packet, raw}, {active, false}], Timeout).
+connect(Address, Port, Opt, Timeout) ->
+  gen_tcp:connect(Address, Port, Opt, Timeout).
+
+disconnect(Socket) ->
+  gen_tcp:close(Socket).
+
+authenticate(Socket, User, Encrypted_password) ->
+  Login = aspike_protocol:enc_login_request(User, Encrypted_password),
+  ok = gen_tcp:send(Socket, Login),
+  Response = receive_response_login(Socket, 1000),
+  aspike_protocol:dec_login_response(Response).
+
+handle_authentication({ok, {?AEROSPIKE_OK, Fields}, Rest}) ->
+  authenticated(Fields, Rest);
+handle_authentication({ok, {?AEROSPIKE_SECURITY_NOT_SUPPORTED, Fields}, Rest}) ->
+  authenticated(Fields, Rest);
+handle_authentication({ok, {?AEROSPIKE_SECURITY_NOT_ENABLED, Fields}, Rest}) ->
+  authenticated(Fields, Rest);
+handle_authentication({ok, {Status, Fields}, _Rest}) ->
+  Err = {aspike_status:status(Status), Fields},
+  {error, Err};
+handle_authentication({error, Reason}) ->
+  {error, Reason}.
+
+authenticated(Fields, Rest) ->
+  Timestamp = erlang:system_time(second),
+  Token = proplists:get_value(session_token, Fields),
+  Ttl = proplists:get_value(session_ttl, Fields),
+  {ok, #{ts => Timestamp, token => Token, ttl => Ttl,
+    rest => Rest}}.
+
+%% Connect and login utils. End
+
+%% Receive response utils
+receive_response_login(Socket, Timeout) ->
+  receive_proto(Socket, 8, Timeout, ?AS_ADMIN_MESSAGE_TYPE).
+
+receive_response_info(Socket, Timeout) ->
+  receive_proto(Socket, 8, Timeout, ?AS_INFO_MESSAGE_TYPE).
+
+receive_response_message(Socket, Timeout) ->
+  receive_proto(Socket, 8, Timeout, ?AS_MESSAGE_TYPE).
+
+receive_proto(Socket, Header_size, Timeout, Type) ->
+  Ret_header = gen_tcp:recv(Socket, Header_size, Timeout),
+  case Ret_header of
+    {ok, Header} ->
+      <<?AS_PROTO_VERSION:8, Type:8, Size:48/big-unsigned-integer>>
+        = Header,
+      Ret_data = gen_tcp:recv(Socket, Size, Timeout),
+      case Ret_data of
+        {ok, Data} -> <<Header/binary, Data/binary>>;
+        Other_data -> Other_data
+      end;
+    Other_header -> Other_header
+  end.
+
+%% Receive response utils. End

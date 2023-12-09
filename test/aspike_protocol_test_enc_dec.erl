@@ -21,6 +21,7 @@ aspike_protocol_enc_dec_test_() ->
       fun test_admin_pkt/0,
       fun test_admin_header/0,
       fun test_login_pkt/0,
+      fun test_info_pkt/0,
       fun test_login_request/0,
       fun test_login_response/0,
       fun test_dec_login_request/0,
@@ -177,6 +178,24 @@ test_login_pkt() ->
   ?assertEqual(2, length(Fields)),
   ?assertEqual(User, proplists:get_value(?USER, Fields)),
   ?assertEqual(Credential, proplists:get_value(?CREDENTIAL, Fields)).
+
+test_info_pkt() ->
+  Names = ["Name1", "Name2", "Name3"],
+  Enc_request_pkt = aspike_protocol:enc_info_request_pkt(Names),
+  Dec_request_pkt = aspike_protocol:dec_info_request_pkt(Enc_request_pkt),
+  Names_expected = lists:append(lists:map(fun list_to_binary/1, Names), [<<>>]),
+  ?assertEqual(Names_expected, Dec_request_pkt),
+
+  Fields = [
+    ["Field1", "value1_1"],
+    ["Field2", "value2_1", "value2_2", "value2_3"],
+    ["Field3", "value3_1", "value3_2"]],
+  Enc_response_pkt = aspike_protocol:enc_info_response_pkt(Fields),
+  Dec_response_pkt = aspike_protocol:dec_info_response_pkt(Enc_response_pkt),
+  Fields_expected = lists:map(fun list_to_tuple/1,
+    lists:append(lists:map(fun (Field) ->
+      lists:map(fun list_to_binary/1, Field) end, Fields), [[<<>>]])),
+  ?assertEqual(Fields_expected, Dec_response_pkt).
 
 test_login_request() ->
   User = <<"User">>, Credential = <<"Credential">>,
@@ -447,9 +466,9 @@ test_dec_put_request() ->
 
 test_dec_put_response() ->
   Enc = aspike_protocol:enc_put_response(?AEROSPIKE_OK),
-  {ok, #aspike_message_type_header{result_code = Result_code} = _Decoded, Rest}
+  {ok, Decoded, Rest}
     = aspike_protocol:dec_put_response(Enc),
-  ?assertEqual(?AEROSPIKE_OK, Result_code),
+  ?assertEqual(?AEROSPIKE_OK, Decoded),
   ?assertEqual(<<>>, Rest).
 
 test_get_request() ->

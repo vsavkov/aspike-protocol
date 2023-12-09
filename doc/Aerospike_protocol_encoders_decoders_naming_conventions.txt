@@ -1,0 +1,217 @@
+Naming convention:
+  enc_XXX_request - encode XXX request
+  enc_XXX_response - encode response to XXX request
+  dec_XXX_request - decode XXX request
+  dec_XXX_response - decode response to XXX request
+
+Flow:
+  XXX request ->
+    -> enc_XXX_request ->
+    -> transport ->
+    -> dec_XXX_request ->
+    -> process XXX request to produce a response to the XXX request ->
+    -> enc_XXX_response ->
+    -> transport ->
+    -> dec_XXX_response ->
+    -> process the response to the XXX request.
+
+Use cases:
+==============================================
+|      |    _request      |    _response     |
+----------------------------------------------
+| enc_ | to use in Client | to use in Server |
+| dec_ | to use in Server | to use in Client |
+==============================================
+
+Decoders, dec_XXX, convention:
+Return:
+  need_more
+  {error, Reason}
+  {ok, Decoded, Rest}
+
+
+====================
+High-level requests
+  LOGIN
+    enc_login_request
+    dec_login_request
+    enc_login_response
+    dec_login_response
+  PUT
+    enc_put_request
+    dec_put_request
+    enc_put_response
+    dec_put_response
+  GET
+    enc_get_request
+    dec_get_request
+    enc_get_response
+    dec_get_response
+
+====================
+LOGIN
+
+enc_login_request
+  -> enc_login_request_pkt
+    -> enc_admin_header
+      -> <<...>>
+    -> enc_ltv
+      -> <<...>>
+  -> enc_admin_pkt
+      -> enc_proto
+        -> <<...>>
+
+dec_login_request
+  <- dec_admin_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_login_request_pkt
+    <- dec_admin_header
+      <- <<...>>
+    <- dec_ltv
+      <- <<...>>
+
+enc_login_response
+  -> enc_proto_admin_fields
+    -> from_admin_field
+    -> enc_ltv
+      -> <<...>>
+  -> enc_login_response_pkt
+      -> <<...>>
+  -> enc_admin_pkt
+    -> enc_proto
+      -> <<...>>
+
+dec_login_response
+  <- dec_admin_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_login_response_pkt
+    <- dec_proto_admin_fields
+      <- to_admin_field
+        <- dec_ltv
+          <- <<...>>
+
+====================
+PUT
+
+enc_put_request
+  -> enc_put_request_pkt
+    -> enc_put_header
+      -> enc_message_type_header
+        -> <<...>>
+    -> enc_key_digest
+        -> enc_ltv
+          -> <<...>>
+        ->  <<...>>
+    -> enc_bins
+      -> enc_bin
+        -> to_typed_enc_value
+        -> enc_bin_typed_value
+          -> enc_lv
+            -> <<...>>
+  -> enc_message_pkt
+      -> enc_proto
+        -> <<...>>
+
+dec_put_request
+  <- dec_message_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_put_request_pkt
+    <- dec_put_header
+      <- dec_message_type_header
+        <- <<...>>
+    <- dec_key_digest
+      <- dec_ltv
+        <- <<...>>
+    <- dec_bins
+      <- dec_bin
+        <- <<...>>
+        <- from_typed_enc_value
+
+enc_put_response
+  -> enc_put_response_pkt
+    -> enc_message_type_header
+      -> <<...>>
+  -> enc_message_pkt
+      -> enc_proto
+        -> <<...>>
+
+dec_put_response
+  <- dec_message_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_put_response_pkt
+    <- dec_message_type_header
+      <- <<...>>
+
+====================
+GET
+
+enc_get_request
+  -> enc_get_request_pkt
+    -> enc_get_header
+      -> enc_message_type_header
+        -> <<...>>
+    -> enc_key_digest
+        -> enc_ltv
+          -> <<...>>
+        ->  <<...>>
+    -> enc_bin_names
+      -> enc_bin_name
+        -> <<...>>
+  -> enc_message_pkt
+      -> enc_proto
+        -> <<...>>
+
+dec_get_request
+  <- dec_message_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_get_request_pkt
+    <- dec_get_header
+      <- dec_message_type_header
+        <- <<...>>
+    <- check_get_request
+    <- dec_key_digest
+      <- dec_ltv
+        <- <<...>>
+    <- dec_bin_names
+      <- dec_bin_name
+        <- <<...>>
+
+enc_get_response
+  -> enc_get_response_pkt
+    -> enc_get_response_header
+      -> enc_message_type_header
+        -> <<...>>
+    -> enc_fields_and_ops
+      -> enc_fields
+        -> enc_lv
+          -> <<...>>
+      -> enc_ops_response
+        -> enc_op_response
+          -> to_typed_enc_value
+          -> <<...>>
+      -> <<...>>
+  -> enc_message_pkt
+      -> enc_proto
+        -> <<...>>
+
+dec_get_response
+  <- dec_message_pkt
+    <- dec_proto
+      <- <<...>>
+  <- dec_get_response_pkt
+    <- dec_message_type_header
+      <- <<...>>
+    <- dec_fields_and_ops
+      <- dec_lv
+        <- <<...>>
+      <- dec_ops
+        <- dec_lv
+          <- <<...>>
+        <- dec_op
+          <- from_typed_enc_value
+            <- <<...>>

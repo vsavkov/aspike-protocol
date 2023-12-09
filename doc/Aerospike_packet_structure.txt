@@ -1,0 +1,574 @@
+Each packet sent over wire from a client to an Aerospike cluster node and back starts with packet header.
+
+PACKET HEADER
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| Proto Version | Packet Type   |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+       Total 8 bytes
+
+'Proto Version' = 2
+'Packet Type':
+- INFO = 1;
+- ADMIN = 2;
+- MESSAGE = 3 (Key-value operations related);
+- COMPRESSED = 4.
+'Total body length': number of bytes following the Packet Header
+
+
+ENCODINGS OF PARTS OF PACKETS THAT ARE GENERIC for ALL Packet Types.
+
+LENGTH-TAG-VALUE (LTV) ENCODING
+'Tag' - 1 byte
+'Value' - any number of bytes
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| Len = Length of the following Tag and Value                   |
+       +---------------+---------------+---------------+---------------+
+      4| Tag           | Value, byte 0 | Value, byte 1 | Value, byte 2 |
+       +---------------+---------------+---------------+---------------+
+      8| Value, byte 3 | ...           | byte (Len-2)  |
+       +---------------+---------------+---------------+
+
+LENGTH-VALUE (LV) ENCODING
+'Value' - any number of bytes
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| Len = Length of the following Value                           |
+       +---------------+---------------+---------------+---------------+
+      4| Value, byte 0 | Value, byte 1 | Value, byte 2 | Value, byte 3 |
+       +---------------+---------------+---------------+---------------+
+      8| Value, byte 4 | ...           | byte (Len-1)  |
+       +---------------+---------------+---------------+
+
+
+Section. ADMIN Packet Type.
+
+LOGIN Request
+'Packet Type': ADMIN = 2, 'Command': LOGIN=20(0x14)
+Parameters:
+  USER - User's name;
+  CREDENTIAL - Blowfish (Aerospike-specific) Encrypted Password, 60 bytes.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 2             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 0             | 0             | Command = 20  | Field Count=2 |
+       +---------------+---------------+---------------+---------------+
+     12| 0             | 0             | 0             | 0             |
+       +---------------+---------------+---------------+---------------+
+     16| 0             | 0             | 0             | 0             |
+       +---------------+---------------+---------------+---------------+
+     20| 0             | 0             | 0             | 0             |
+       +---------------+---------------+---------------+---------------+
+     24| LTV, T=(CRED FldId=3), V=(Blowfish Encrypted Password)        |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV encoding of Blowfish Encrypted Password (60 bytes)        |
+       +---------------+---------------+---------------+---------------+
+     88| Pwd,last byte | LTV, T=(USER FldId=0), V=(User name)          |
+       +---------------+---------------+---------------+---------------+
+     92| Len,last byte |  LTV encoding of User name                    |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV encoding of User name                                     |
+       +---------------+---------------+---------------+---------------+
+       | User name, last bytes         |
+       +---------------+---------------+
+       Total bytes:
+        24 (Header) + (4 + 1 + 60 (Password length)) + (4 + 1 + (Length of User name))
+
+LOGIN Response
+'Packet Type': ADMIN = 2
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 2             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |       Total body length (128 * 1024 * 1024, 27 bits |
+       +---------------+---------------+---------------+---------------+
+      8| Unused        | Status        | Unused        |Field count (N)|
+       +---------------+---------------+---------------+---------------+
+     12| LTV_1                                                         |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV_1         | LTV_2                                         |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV_2                         | ...                           |
+       +---------------+---------------+---------------+---------------+
+    ...| ...           | LTV_N                                         |
+       +---------------+---------------+---------------+---------------+
+    ...| ...                            | LTV_N        |
+       +---------------+---------------+---------------+
+       Total bytes:
+        12 (Header) + (4 + Len_1) + (4 + Len_2) + ... + (4 + Len_N)
+                       \______________________________________/
+                                    'Field count'
+'Status':
+  'Status' = 0 is an indication of successful LOGIN;
+  For complete list of Status codes and related Status messages
+  see aspike_status.hrl, aspike_status.erl.
+'Tag':
+  SESSION_TOKEN = 5
+  SESSION_TTL = 6
+
+Section. ADMIN Packet Type. End
+
+Section. INFO Packet Type
+
+INFO HEADER
+'Packet Type': INFO = 1
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 1             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |       Total body length (128 * 1024 * 1024, 27 bits |
+       +---------------+---------------+---------------+---------------+
+
+INFO Request, Parameters: List of predefined 'Names'
+'Packet Type': INFO = 1
+Some (but not all) known 'Names':
+ - service-clear-std: to query a cluster 'seed' node for an 'access' node;
+ - node: to query Node ID;
+ - peers-clear-std: to query list of cluster nodes;
+ - namespaces: to query list of 'namespaces' available;
+ - namespace/<name-of-namespace>: to query the <name-of-namespace> parameters;
+ - partitions: to query a number of partitions;
+ - replicas: to query replicas information;
+ - best-practices;
+ - bins/[<NAMESPACE>];
+ - feature-key;
+ - get-config;
+ - get-config:context=namespace;id=<name-of-namespace>;
+ - get-config:context=network;
+ - get-stats;
+ - health-outliers;
+ - health-stats;
+ - histogram:namespace=pi-stream;type=object-size;
+ - histogram:namespace=pi-stream;set=set-gateway;type=object-size;
+ - histogram:namespace=pi-stream;set=set-gateway;type=ttl;
+ - latencies:;
+ - latencies:hist={<name-of-namespace>}-read;
+ - latencies:hist={<name-of-namespace>}-write;
+ - log/0;
+ - logs;
+ - mesh.
+For more details, see https://docs.aerospike.com/server/reference/info?version=6.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 1             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      binary concatenate the above header
+      with
+        Name1 appended with '\n' \
+        Name2 appended with '\n' |
+        ...                      |
+        NameN appended with '\n' /
+
+INFO Response
+'Packet Type': INFO = 1
+'Result code':
+  'Result code' = 0 is an indication of successful GET;
+  For complete list of 'Result codes' and related messages
+  see aspike_status.hrl, aspike_status.erl.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 1             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+       binary concatenated
+       with
+        'Field' 1 appended with '\n' \
+        'Field' 2 appended with '\n' |
+        ...                          |
+        'Field' N appended with '\n' /
+       where each 'Field' contains tab('\t')-separated values.
+       The content of each 'Field' is specific to the 'Name' sent in the INFO Request.
+
+Section. INFO Packet Type. End
+
+Section. MESSAGE Packet Type.
+
+ENCODING OF PARTS OF PACKETS THAT ARE GENERIC for MESSAGE Packet Types.
+
+MESSAGE HEADER
+'Packet Type': MESSAGE = 3
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |       Total body length (128 * 1024 * 1024, 27 bits |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+        byte 8 = 22 - number of bytes in the MESSAGE (Packet Type) HEADER
+       Total bytes:
+        30 bytes = 8 bytes (PACKET header) + 22 (MESSAGE header)
+
+
+'Key digest' is RIPEMD-160 message digest of pair ('Set name', 'Key').
+
+
+('Namespace', 'Set name', 'Key digest' (RIPEMD-160)) ENCODING.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| LTV, T=(NAMESPACE FldId=0), V=(Namespace)                     |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV, T=(SETNAME FldId=1), V=(Set name)                        |
+       +---------------+---------------+---------------+---------------+
+    ...| LTV, T=(DIGEST FldId=4), V=(Key digest (20 bytes))            |
+       +---------------+---------------+---------------+---------------+
+
+
+('Operation type', 'Bin name', 'Value type', 'Value') ENCODING.
+'Operation type':
+  1 - READ;
+  2 - WRITE;
+  ...
+  17;
+
+'Value type':
+   0 - UNDEF, Value len = 0;
+   1 - INTEGER, Value len = 8 bytes;
+   2 - DOUBLE, Value len = 8 bytes;
+   3 - STRING,  Value len = length of the string, in bytes;
+   4 - BLOB,  Value len = length of the blob, in bytes;
+  17 - BOOL, Value len = 1 byte, Value: 0 or 1;
+
+('Operation type', 'Bin name', 'Value type', 'Value') ENCODING is
+the LENGTH-VALUE (LV) ENCODING where the VALUE is the packet below:
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| Operation type| Value type    | 0 (Unused)    | Bin name len  |
+       +---------------+---------------+---------------+---------------+
+      4|Bin name,byte0 |Bin name,byte1 | ...                           |
+       +---------------+---------------+---------------+---------------+
+    ...|           Bin name, last byte | Value                         |
+       +---------------+---------------+---------------+---------------+
+    ...| Value - number of allocated bytes depends on Value type       |
+       +---------------+---------------+---------------+---------------+
+
+('Bin name', 'Value type', 'Value') ENCODING.
+('Bin name', 'Value type', 'Value') ENCODING is
+the ('Operation type', 'Bin name', 'Value type', 'Value') ENCODING
+where 'Operation type' is ignored (set to 0).
+
+('Operation type', 'Bin name') ENCODING is
+the LENGTH-VALUE (LV) ENCODING where the VALUE is the packet below:
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| Operation type| 0 (Unused)    | 0 (Unused)    | Bin name len  |
+       +---------------+---------------+---------------+---------------+
+      4|Bin name,byte0 |Bin name,byte1 | ...                           |
+       +---------------+---------------+---------------+---------------+
+    ...|           Bin name, last byte |
+       +---------------+---------------+
+
+
+PUT Request, Parameters: 'Namespace', 'Set name', 'Key digest', array of pairs ('Bin_name', 'Bin_value')
+'Packet Type': MESSAGE = 3
+'Write attr' = 1 (AS_MSG_INFO2_WRITE)
+'Field count' = 3 - Namespace, Set name, Key digest
+'Operation' = 2 (AS_OPERATOR_WRITE)
+'Bin count' = number of pairs in array of pairs ('Bin_name', 'Bin_value')
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+      binary concatenate the above header
+      with ('Namespace', 'Set name', 'Key digest' (RIPEMD-160)) ENCODING
+      and
+      with
+        (2=AS_OPERATOR_WRITE, 'Bin name' 1, 'Value type' 1, 'Value' 1) ENCODING \
+        (2=AS_OPERATOR_WRITE, 'Bin name' 2, 'Value type' 2, 'Value' 2) ENCODING | 'Bin count'
+        ...                                                                     |
+        (2=AS_OPERATOR_WRITE, 'Bin name' N, 'Value type' N, 'Value' N) ENCODING /
+
+PUT Response
+'Packet Type': MESSAGE = 3
+'Result code':
+  'Result code' = 0 is an indication of successful PUT;
+  For complete list of 'Result codes' and related messages
+  see aspike_status.hrl, aspike_status.erl.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+
+
+GET Request, Parameters: 'Namespace', 'Set name', 'Key digest', array of 'Bin_names'
+'Packet Type': MESSAGE = 3
+'Read attr' = 1 (AS_MSG_INFO1_READ - to read the bins, submitted as parameters)
+'Read attr' = 3 (1 bitwise or 2)
+  (AS_MSG_INFO1_READ bitwise or AS_MSG_INFO1_GET_ALL - to read all bins for the submitted 'Key digest')
+'Field count' = 3 - 'Namespace', 'Set name', 'Key digest'
+'Operation' = 1 (AS_OPERATOR_READ)
+'Bin count' = number of elements in array of 'Bin_names'
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+      binary concatenate the above header
+      with ('Namespace', 'Set name', 'Key digest' (RIPEMD-160)) ENCODING
+      and, if 'Read attr' = 1 (AS_MSG_INFO1_READ - to read the bins, submitted as parameters),
+      with
+        (1=AS_OPERATOR_READ, 'Bin name' 1) ENCODING \
+        (1=AS_OPERATOR_READ, 'Bin name' 2) ENCODING | 'Bin count'
+        ...                                         |
+        (1=AS_OPERATOR_READ, 'Bin name' N) ENCODING /
+
+GET Response
+'Packet Type': MESSAGE = 3
+'Result code':
+  'Result code' = 0 is an indication of successful GET;
+  For complete list of 'Result codes' and related messages
+  see aspike_status.hrl, aspike_status.erl.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+       binary concatenated
+       with
+        LV-ENCODING 'Field' 1 \
+        LV-ENCODING 'Field' 2 | 'Field count'
+        ...                   |
+        LV-ENCODING 'Field' N /
+       and
+       with
+        ('Bin name' 1, 'Value type' 1, 'Value' 1) ENCODING \
+        ('Bin name' 2, 'Value type' 2, 'Value' 2) ENCODING | 'Bin count'
+        ...                                                |
+        ('Bin name' M, 'Value type' M, 'Value' M) ENCODING /
+
+
+REMOVE Request, Parameters: 'Namespace', 'Set name', 'Key digest'
+'Packet Type': MESSAGE = 3
+'Write attr' = 3 (1 bitwise or 2)
+  (AS_MSG_INFO2_WRITE bitwise or AS_MSG_INFO2_DELETE)
+'Field count' = 3 - 'Namespace', 'Set name', 'Key digest'
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+      binary concatenate the above header
+      with ('Namespace', 'Set name', 'Key digest' (RIPEMD-160)) ENCODING
+
+REMOVE Response
+'Packet Type': MESSAGE = 3
+'Result code':
+  'Result code' = 0 is an indication of successful REMOVE;
+  For complete list of 'Result codes' and related messages
+  see aspike_status.hrl, aspike_status.erl.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+
+
+EXISTS Request, Parameters: 'Namespace', 'Set name', 'Key digest'
+'Packet Type': MESSAGE = 3
+'Read attr' = 33 (1 bitwise or 32)
+  (AS_MSG_INFO1_READ bitwise or AS_MSG_INFO1_GET_NOBINDATA)
+'Field count' = 3 - 'Namespace', 'Set name', 'Key digest'
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+      binary concatenate the above header
+      with ('Namespace', 'Set name', 'Key digest' (RIPEMD-160)) ENCODING
+
+EXISTS Response
+'Packet Type': MESSAGE = 3
+'Result code':
+  'Result code' = 0 is an indication of successful EXISTS;
+  For complete list of 'Result codes' and related messages
+  see aspike_status.hrl, aspike_status.erl.
+
+     Byte/     0       |       1       |       2       |       3       |
+        /              |               |               |               |
+       |0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
+       +---------------+---------------+---------------+---------------+
+      0| 2             | 3             |                               |
+       +---------------+---------------+---------------+---------------+
+      4|         |      Total body length (128 * 1024 * 1024, 27 bits) |
+       +---------------+---------------+---------------+---------------+
+      8| 22            | Read attr     | Write attr    | Info attr     |
+       +---------------+---------------+---------------+---------------+
+     12| Unused        | Result code   | Generation (32-bits)          |
+       +---------------+---------------+---------------+---------------+
+     16| Generation (32-bits)          | TTL (32-bits)                 |
+       +---------------+---------------+---------------+---------------+
+     20| TTL (32-bits)                 | Timeout (32-bits)             |
+       +---------------+---------------+---------------+---------------+
+     24| Timeout (32-bits)             | Field count                   |
+       +---------------+---------------+---------------+---------------+
+     28| Bin count                     |
+       +---------------+---------------+
+
+Section. MESSAGE Packet Type. End

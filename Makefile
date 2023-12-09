@@ -11,7 +11,7 @@ clean:
 
 compile:
 	@echo "Running rebar3 compile..."
-	@$(REBAR3) as compile compile
+	@$(REBAR3) compile
 
 eunit:
 	@echo "Running rebar3 eunit..."
